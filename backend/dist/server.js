@@ -77315,7 +77315,9 @@ var toolsRoutes_default = tools;
 
 // src/shared/utils/health.ts
 var normalizeDomain = (domain) => {
-  return domain.trim().toLowerCase().replace(/^https?:\/\//, "").split(":")[0].split("/")[0].replace(/\/+$/, "");
+  let d = domain.trim().toLowerCase().replace(/^https?:\/\//, "").split(":")[0].split("/")[0].replace(/\/+$/, "");
+  if (d === "127.0.0.1" || d === "192.168.100.100") return "localhost";
+  return d;
 };
 var validateLicense = async (license, currentHost) => {
   if (!license) return { success: false, message: "license_missing" };
