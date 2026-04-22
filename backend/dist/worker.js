@@ -142,8 +142,10 @@ var init_config = __esm({
         // Bitwarden Icon API
         "https://favicon.im",
         // Favicon.im API
-        "https://explorer-api.walletconnect.com"
+        "https://explorer-api.walletconnect.com",
         // 允许加载各种Web3钱包Logo图库
+        "https://*.blizzard.com",
+        "https://*.battle.net"
       ],
       CONNECT: [
         "'self'",
@@ -11301,6 +11303,21 @@ function base32Decode(encoded) {
   }
   return buffer2;
 }
+function bytesToBase32(bytes) {
+  let bits = 0, value = 0, output = "";
+  for (let i2 = 0; i2 < bytes.length; i2++) {
+    value = value << 8 | bytes[i2];
+    bits += 8;
+    while (bits >= 5) {
+      output += BASE32_CHARS[value >>> bits - 5 & 31];
+      bits -= 5;
+    }
+  }
+  if (bits > 0) {
+    output += BASE32_CHARS[value << 5 - bits & 31];
+  }
+  return output;
+}
 async function hmac2(key, data, algorithm = "SHA-1") {
   const keyBuffer = typeof key === "string" ? new TextEncoder().encode(key) : key;
   const dataBuffer = new ArrayBuffer(8);
@@ -11315,6 +11332,17 @@ async function hmac2(key, data, algorithm = "SHA-1") {
   const signature = await crypto.subtle.sign("HMAC", cryptoKey, dataBuffer);
   return new Uint8Array(signature);
 }
+async function hmacSHA1(key, data) {
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw",
+    key,
+    { name: "HMAC", hash: "SHA-1" },
+    false,
+    ["sign"]
+  );
+  const signature = await crypto.subtle.sign("HMAC", cryptoKey, data);
+  return new Uint8Array(signature);
+}
 var BASE32_CHARS;
 var init_base2 = __esm({
   "src/shared/utils/otp/base.ts"() {
@@ -11324,8 +11352,8 @@ var init_base2 = __esm({
 });
 
 // src/shared/utils/otp/protocols/totp.ts
-async function generateTOTP(secret, timeStep = 30, digits = 6, algorithm = "SHA-1") {
-  const time4 = Math.floor(Date.now() / 1e3 / timeStep);
+async function generateTOTP(secret, timeStep = 30, digits = 6, algorithm = "SHA-1", timestamp3 = Date.now()) {
+  const time4 = Math.floor(timestamp3 / 1e3 / timeStep);
   const secretBytes = typeof secret === "string" ? base32Decode(secret) : secret;
   const hmacResult = await hmac2(secretBytes, time4, algorithm);
   const offset = hmacResult[hmacResult.length - 1] & 15;
@@ -11379,35 +11407,56 @@ var init_hotp = __esm({
   }
 });
 
+// src/shared/utils/otp/protocols/blizzard.ts
+async function generateBlizzardOTP(secret, timeStep = 30, timestamp3 = Date.now()) {
+  return generateTOTP(secret, timeStep, 8, "SHA-1", timestamp3);
+}
+var init_blizzard = __esm({
+  "src/shared/utils/otp/protocols/blizzard.ts"() {
+    "use strict";
+    init_totp();
+  }
+});
+
 // src/shared/utils/otp/index.ts
 var otp_exports = {};
 __export(otp_exports, {
   base32Decode: () => base32Decode,
   buildOTPAuthURI: () => buildOTPAuthURI,
+  bytesToBase32: () => bytesToBase32,
   generate: () => generate,
+  generateBlizzardOTP: () => generateBlizzardOTP,
   generateHOTP: () => generateHOTP,
   generateSteamTOTP: () => generateSteamTOTP,
   generateTOTP: () => generateTOTP,
   hmac: () => hmac2,
+  hmacSHA1: () => hmacSHA1,
   normalizeOtpAccount: () => normalizeOtpAccount,
   parseOTPAuthURI: () => parseOTPAuthURI,
   resolveOtpType: () => resolveOtpType,
   validateBase32Secret: () => validateBase32Secret
 });
-async function generate(secret, timeOrCounter = 30, digits = 6, algorithm = "SHA1", type = "totp") {
+async function generate(secret, timeOrCounter = 30, digits = 6, algorithm = "SHA1", type = "totp", timestamp3 = Date.now()) {
   if (type === "steam") {
     return generateSteamTOTP(secret, timeOrCounter);
+  }
+  if (type === "blizzard") {
+    return generateBlizzardOTP(secret, timeOrCounter, timestamp3);
   }
   if (type === "hotp") {
     return generateHOTP(secret, timeOrCounter, digits, algorithm);
   }
-  return generateTOTP(secret, timeOrCounter, digits, algorithm);
+  return generateTOTP(secret, timeOrCounter, digits, algorithm, timestamp3);
 }
 function normalizeOtpAccount(item = {}) {
   const type = resolveOtpType(item.type, item);
   const normalized = { ...item, type };
   if (type === "steam") {
     normalized.digits = 5;
+    normalized.period = 30;
+    normalized.algorithm = "SHA1";
+  } else if (type === "blizzard") {
+    normalized.digits = 8;
     normalized.period = 30;
     normalized.algorithm = "SHA1";
   } else {
@@ -11440,6 +11489,9 @@ function resolveOtpType(typeRaw, context = {}) {
   const digits = context.digits || 0;
   if (type === "steam" || type === "steam guard" || algo === "STEAM" || digits === 5 && service.includes("STEAM")) {
     return "steam";
+  }
+  if (["blizzard", "battle.net"].some((k2) => type.includes(k2) || service.includes(k2.toUpperCase()))) {
+    return "blizzard";
   }
   if (type === "totp") {
     return "totp";
@@ -11499,7 +11551,8 @@ function parseOTPAuthURI(uri) {
   }
 }
 function buildOTPAuthURI(data) {
-  const { service, account, secret, type = "totp", algorithm = "SHA1", digits = 6, period = 30, counter = 0 } = data;
+  const normalized = normalizeOtpAccount(data);
+  const { service, account, secret, type, algorithm, digits, period, counter } = normalized;
   const label = account ? encodeURIComponent(`${service}:${account}`) : encodeURIComponent(service);
   const issuer = encodeURIComponent(service);
   if (type === "hotp") {
@@ -11512,6 +11565,9 @@ function buildOTPAuthURI(data) {
   if (type === "steam") {
     return `otpauth://steam/${label}?secret=${secret}&issuer=${issuer}&algorithm=SHA1&digits=5`;
   }
+  if (type === "blizzard") {
+    return `otpauth://totp/${label}?secret=${secret}&issuer=${issuer}&algorithm=SHA1&digits=8&period=30`;
+  }
   return `otpauth://totp/${label}?secret=${secret}&issuer=${issuer}&algorithm=${algorithm}&digits=${digits}&period=${period}`;
 }
 var init_otp = __esm({
@@ -11522,6 +11578,7 @@ var init_otp = __esm({
     init_totp();
     init_steam();
     init_hotp();
+    init_blizzard();
   }
 });
 
@@ -46510,6 +46567,7 @@ async function batchInsertVaultItems(dbClient, items, key, createdBy, startSortO
 // src/features/vault/vaultService.ts
 init_crypto();
 init_otp();
+import { Buffer as Buffer2 } from "node:buffer";
 var VaultService = class {
   repository;
   env;
@@ -46913,6 +46971,67 @@ var VaultService = class {
       duplicates: duplicateCount,
       pending: false
     };
+  }
+  /**
+   * Blizzard/battle.net 账号还原
+   * 利用现代 OAuth SSO 流程从暴雪 API 获取底层密钥
+   */
+  async restoreBlizzardNetAccount(serial3, restoreCode, ssoToken) {
+    if (!serial3 || !serial3.trim()) throw new AppError("blizzard_serial_required", 400);
+    if (!restoreCode || !restoreCode.trim()) throw new AppError("blizzard_restore_code_required", 400);
+    if (!ssoToken || !ssoToken.trim()) throw new AppError("blizzard_sso_token_required", 400);
+    const normalizedSerial = serial3.replace(/-/g, "").toUpperCase();
+    const normalizedCode = restoreCode.toUpperCase().replace(/\s/g, "");
+    try {
+      const commonHeaders = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+      };
+      console.log("[BlizzardRestore] Exchanging ST for AccessToken...");
+      const tokenRes = await fetch("https://oauth.battle.net/oauth/sso", {
+        method: "POST",
+        headers: {
+          ...commonHeaders,
+          "Content-Type": "application/x-www-form-urlencoded"
+        },
+        body: new URLSearchParams({
+          client_id: "baedda12fe054e4abdfc3ad7bdea970a",
+          grant_type: "client_sso",
+          scope: "auth.authenticator",
+          token: ssoToken.trim()
+        }).toString()
+      });
+      if (!tokenRes.ok) {
+        const errData = await tokenRes.text().catch(() => "{}");
+        console.error("[BlizzardRestore] OAuth failed:", tokenRes.status, errData);
+        throw new AppError(`blizzard_oauth_failed: ${tokenRes.status}`, 401);
+      }
+      const { access_token: accessToken } = await tokenRes.json();
+      console.log("[BlizzardRestore] Requesting device secret...");
+      const restoreRes = await fetch("https://authenticator-rest-api.bnet-identity.blizzard.net/v1/authenticator/device", {
+        method: "POST",
+        headers: {
+          ...commonHeaders,
+          "Authorization": `Bearer ${accessToken}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          serial: normalizedSerial,
+          restoreCode: normalizedCode
+        })
+      });
+      if (!restoreRes.ok) {
+        const errText = await restoreRes.text().catch(() => "unknown");
+        console.error("[BlizzardRestore] Device API failed:", restoreRes.status, errText);
+        throw new AppError(`blizzard_restore_failed: ${restoreRes.status}`, 400);
+      }
+      const { deviceSecret } = await restoreRes.json();
+      if (!deviceSecret) throw new AppError("invalid_restore_response", 500);
+      return bytesToBase32(new Uint8Array(Buffer2.from(deviceSecret, "hex")));
+    } catch (err) {
+      if (err instanceof AppError) throw err;
+      console.error("[BlizzardRestore] Unexpected flow error:", err.message || err);
+      throw new AppError(`blizzard_service_error: ${err.message || "unknown"}`, 502);
+    }
   }
   /**
    * 批量同步离线操作 (Sync Mode)
@@ -47509,6 +47628,22 @@ vault5.post("/import", rateLimit({
   const { content, type, password } = await c2.req.json();
   const result = await service.importAccounts(user.username, type, content, password);
   return c2.json({ success: true, ...result });
+});
+vault5.post("/import/blizzard-net", rateLimit({
+  windowMs: 60 * 1e3,
+  max: 5
+}), async (c2) => {
+  const { serial: serial3, restoreCode, ssoToken } = await c2.req.json();
+  if (!serial3 || !restoreCode) {
+    return c2.json({ success: false, error: "serial_and_restore_code_required" }, 400);
+  }
+  const service = getService2(c2);
+  try {
+    const secret = await service.restoreBlizzardNetAccount(serial3, restoreCode, ssoToken);
+    return c2.json({ success: true, secret });
+  } catch (e2) {
+    return c2.json({ success: false, error: e2.message }, e2.statusCode || 500);
+  }
 });
 vault5.post("/add-from-uri", async (c2) => {
   const user = c2.get("user");
