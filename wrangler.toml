@@ -3,6 +3,9 @@ main = "backend/dist/worker.js"
 compatibility_date = "2026-03-17"
 compatibility_flags = ["nodejs_compat"]
 
+[build]
+command = "node scripts/inject_vars.js"
+
 [assets]
 binding = "ASSETS"
 directory = "frontend/dist" 

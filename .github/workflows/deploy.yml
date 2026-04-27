@@ -115,25 +115,6 @@ jobs:
           wranglerVersion: '4.75.0'
           command: d1 execute ${{ secrets.CLOUDFLARE_D1_DATABASE_NAME || 'nodeauth-db' }} --remote --file=backend/schema.sql
 
-      - name: Inject Commit Hash & Platform
-        run: |
-          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
-          echo "Injecting Public SHA: $SHORT_SHA (Platform: Cloudflare Workers)"
-          
-          # 1. Backend Injection
-          sed -i "s/__DIST_COMMIT_HASH__/$SHORT_SHA/g" backend/dist/server.js || true
-          sed -i "s/__DIST_COMMIT_HASH__/$SHORT_SHA/g" backend/dist/worker.js || true
-          sed -i "s/__DIST_PLATFORM__/Cloudflare Workers/g" backend/dist/worker.js || true
-
-          # 2. Frontend Injection: Icons & Manifest
-          sed -i "s/__DIST_ICON_SUFFIX__/cloudflare/g" frontend/dist/index.html || true
-          sed -i "s/__DIST_ICON_SUFFIX__/cloudflare/g" frontend/dist/manifest.webmanifest || true
-          find frontend/dist -name "*.js" -exec sed -i "s/__DIST_ICON_SUFFIX__/cloudflare/g" {} + || true
-
-          # 3. Frontend Injection: Version & Platform Info
-          find frontend/dist -type f \( -name "*.js" -o -name "*.html" \) -exec sed -i "s/__DIST_COMMIT_HASH__/$SHORT_SHA/g" {} + || true
-          find frontend/dist -type f \( -name "*.js" -o -name "*.html" \) -exec sed -i "s/__DIST_PLATFORM__/Cloudflare Workers/g" {} + || true
-
       - name: Generate Secret List
         id: secret_list
         env:

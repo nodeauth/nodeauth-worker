@@ -78652,6 +78652,96 @@ function transformSqlForDialect(sql2, engine2) {
 }
 
 // src/shared/db/migrator.ts
+var BASELINE_SQL = `
+-- \u8D26\u53F7\u8868
+CREATE TABLE IF NOT EXISTS vault (
+    id TEXT PRIMARY KEY,
+    service TEXT NOT NULL,
+    account TEXT NOT NULL,
+    category TEXT,
+    secret TEXT NOT NULL,
+    digits INTEGER DEFAULT 6,
+    period INTEGER DEFAULT 30,
+    type TEXT DEFAULT 'totp',
+    algorithm TEXT DEFAULT 'SHA1',
+    counter INTEGER DEFAULT 0,
+    created_at INTEGER,
+    created_by TEXT,
+    updated_at INTEGER,
+    updated_by TEXT,
+    sort_order INTEGER DEFAULT 0,
+    deleted_at INTEGER
+);
+
+-- \u4E91\u7AEF\u5907\u4EFD\u6E90\u914D\u7F6E\u8868
+CREATE TABLE IF NOT EXISTS backup_providers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    type TEXT NOT NULL,
+    name TEXT NOT NULL,
+    is_enabled BOOLEAN DEFAULT 1,
+    config TEXT NOT NULL,
+    auto_backup BOOLEAN DEFAULT 0,
+    auto_backup_password TEXT,
+    auto_backup_retain INTEGER DEFAULT 30,
+    last_backup_at INTEGER,
+    last_backup_status TEXT,
+    created_at INTEGER,
+    updated_at INTEGER
+);
+
+-- Telegram \u5907\u4EFD\u5386\u53F2
+CREATE TABLE IF NOT EXISTS backup_telegram_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider_id INTEGER NOT NULL,
+    filename TEXT NOT NULL,
+    file_id TEXT NOT NULL,
+    message_id INTEGER NOT NULL,
+    size INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+-- Email \u5907\u4EFD\u5386\u53F2
+CREATE TABLE IF NOT EXISTS backup_email_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider_id INTEGER NOT NULL,
+    filename TEXT NOT NULL,
+    recipient TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+-- Passkey \u51ED\u8BC1\u8868
+CREATE TABLE IF NOT EXISTS auth_passkeys (
+    credential_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    public_key BLOB NOT NULL,
+    counter INTEGER DEFAULT 0,
+    name TEXT,
+    transports TEXT,
+    created_at INTEGER NOT NULL,
+    last_used_at INTEGER
+);
+
+-- \u901F\u7387\u9650\u5236\u8868
+CREATE TABLE IF NOT EXISTS rate_limits (
+    key TEXT PRIMARY KEY,
+    attempts INTEGER DEFAULT 0,
+    last_attempt INTEGER,
+    expires_at INTEGER
+);
+
+-- \u8BBE\u5907\u4F1A\u8BDD\u8868
+CREATE TABLE IF NOT EXISTS auth_sessions (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    device_id TEXT,
+    provider TEXT,
+    device_type TEXT NOT NULL,
+    ip_address TEXT NOT NULL,
+    last_active_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
+`;
 var MIGRATIONS = [
   {
     version: 1,
@@ -78790,16 +78880,44 @@ var MIGRATIONS = [
     postgres: `ALTER TABLE vault ADD COLUMN counter BIGINT DEFAULT 0;`
   }
 ];
+async function checkTableExists(db2, tableName) {
+  const engine2 = db2.engine;
+  let sql2 = "";
+  if (engine2 === "sqlite" || engine2 === "d1") {
+    sql2 = `SELECT name FROM sqlite_master WHERE type='table' AND name='${tableName}'`;
+  } else if (engine2 === "mysql") {
+    sql2 = `SHOW TABLES LIKE '${tableName}'`;
+  } else if (engine2 === "postgres") {
+    sql2 = `SELECT tablename FROM pg_catalog.pg_tables WHERE tablename = '${tableName}'`;
+  }
+  try {
+    const row = await db2.prepare(sql2).get();
+    return !!row;
+  } catch (e2) {
+    return false;
+  }
+}
 async function migrateDatabase(db2) {
   const engine2 = db2.engine;
-  const createMetaTable = transformSqlForDialect(`CREATE TABLE IF NOT EXISTS _schema_metadata (\`key\` TEXT PRIMARY KEY, \`value\` TEXT)`, engine2);
+  const createMetaTable = transformSqlForDialect("CREATE TABLE IF NOT EXISTS _schema_metadata (`key` TEXT PRIMARY KEY, `value` TEXT)", engine2);
   await db2.exec(createMetaTable);
+  const vaultExists = await checkTableExists(db2, "vault");
+  if (!vaultExists) {
+    logger.info(`[Database] Baseline table 'vault' is missing. Initializing baseline schema...`);
+    const statements = BASELINE_SQL.split(";").map((s2) => s2.trim()).filter((s2) => s2.length > 0);
+    for (const rawSql of statements) {
+      const sql2 = transformSqlForDialect(rawSql, engine2);
+      await db2.exec(sql2);
+    }
+    logger.info(`[Database] Baseline schema initialized.`);
+  }
   const queryMeta = transformSqlForDialect("SELECT `value` FROM _schema_metadata WHERE `key` = 'version'", engine2);
   const row = await db2.prepare(queryMeta).get();
   const currentVersion = row ? parseInt(row.value, 10) : 0;
   const pending = MIGRATIONS.filter((m2) => m2.version > currentVersion).sort((a, b) => a.version - b.version);
   if (pending.length === 0) return;
   logger.info(`[Database] Current engine: ${engine2}. version: ${currentVersion}. Migrating to v${pending[pending.length - 1].version}...`);
+  const updateVersionSql = engine2 === "postgres" ? `INSERT INTO _schema_metadata ("key", "value") VALUES ('version', ?) ON CONFLICT ("key") DO UPDATE SET "value" = EXCLUDED.value` : "REPLACE INTO _schema_metadata (`key`, `value`) VALUES ('version', ?)";
   for (const m2 of pending) {
     logger.info(`[Database] Applying v${m2.version}: ${m2.name}`);
     try {
@@ -78809,15 +78927,13 @@ async function migrateDatabase(db2) {
         const sql2 = transformSqlForDialect(rawSql, engine2);
         await db2.exec(sql2);
       }
-      const updateMetaRaw = engine2 === "postgres" ? `INSERT INTO _schema_metadata ("key", "value") VALUES ('version', ?) ON CONFLICT ("key") DO UPDATE SET "value" = EXCLUDED.value` : "REPLACE INTO _schema_metadata (`key`, `value`) VALUES ('version', ?)";
-      const updateMeta = transformSqlForDialect(updateMetaRaw, engine2);
+      const updateMeta = transformSqlForDialect(updateVersionSql, engine2);
       await db2.prepare(updateMeta).run(m2.version.toString());
     } catch (e2) {
       const msg = e2.message?.toLowerCase() || "";
-      if (msg.includes("duplicate column") || msg.includes("already exists") || msg.includes("duplicate key")) {
-        logger.info(`[Database] Skip existing change in v${m2.version}`);
-        const updateMetaRaw = engine2 === "postgres" ? `INSERT INTO _schema_metadata ("key", "value") VALUES ('version', ?) ON CONFLICT ("key") DO UPDATE SET "value" = EXCLUDED.value` : "REPLACE INTO _schema_metadata (`key`, `value`) VALUES ('version', ?)";
-        const updateMeta = transformSqlForDialect(updateMetaRaw, engine2);
+      if (msg.includes("duplicate column") || msg.includes("already exists") || msg.includes("duplicate key") || msg.includes("unknown column")) {
+        logger.info(`[Database] Skip existing change or non-critical error in v${m2.version}: ${e2.message}`);
+        const updateMeta = transformSqlForDialect(updateVersionSql, engine2);
         await db2.prepare(updateMeta).run(m2.version.toString());
         continue;
       }

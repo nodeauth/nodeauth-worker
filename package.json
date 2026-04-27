@@ -1,6 +1,6 @@
 {
     "name": "nodeauth-worker",
-    "version": "2.2.20",
+    "version": "2.2.21",
     "description": "High-security, Lightweight 2FA/TOTP management tool (Distribution Version)",
     "author": "nodeauth",
     "license": "AGPL-3.0",
