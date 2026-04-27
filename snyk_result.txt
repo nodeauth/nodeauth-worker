@@ -1,0 +1,46 @@
+
+Testing /home/runner/work/nodeauth-worker-dev/nodeauth-worker-dev...
+
+Organization:      nap0o
+Package manager:   npm
+Target file:       package-lock.json
+Project name:      nodeauth
+Open source:       no
+Project path:      /home/runner/work/nodeauth-worker-dev/nodeauth-worker-dev
+Licenses:          enabled
+
+✔ Tested /home/runner/work/nodeauth-worker-dev/nodeauth-worker-dev for known issues, no vulnerable paths found.
+
+-------------------------------------------------------
+
+Testing /home/runner/work/nodeauth-worker-dev/nodeauth-worker-dev...
+
+Organization:      nap0o
+Package manager:   npm
+Target file:       backend/package-lock.json
+Project name:      backend
+Open source:       no
+Project path:      /home/runner/work/nodeauth-worker-dev/nodeauth-worker-dev
+Licenses:          enabled
+
+✔ Tested 139 dependencies for known issues, no vulnerable paths found.
+
+-------------------------------------------------------
+
+Testing /home/runner/work/nodeauth-worker-dev/nodeauth-worker-dev...
+
+Organization:      nap0o
+Package manager:   npm
+Target file:       frontend/package-lock.json
+Project name:      frontend
+Open source:       no
+Project path:      /home/runner/work/nodeauth-worker-dev/nodeauth-worker-dev
+Licenses:          enabled
+
+✔ Tested 377 dependencies for known issues, no vulnerable paths found.
+
+
+Tested 3 projects, no vulnerable paths were found.
+
+
+
